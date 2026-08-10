@@ -1,20 +1,24 @@
 local Utils = require(script.Parent.Parent.Parent.Utils)
 local defaultHandler = require(script.Parent.default)
 
-return function(queryPoint: Vector2, gui: ImageLabel | ImageButton): { number }
-	local color = defaultHandler(queryPoint, gui)
-	if gui.ImageTransparency == 1 or gui.Image == "" or gui.IsLoaded == false then
-		return color
+return function(queryPoint: Vector2, gui: ImageLabel | ImageButton): (number, number, number, number)
+	local r, g, b, a = defaultHandler(queryPoint, gui)
+	if gui.ImageTransparency == 1 then
+		return r, g, b, a
+	end
+	-- The Image/IsLoaded checks only apply to uri sources; object sources have no uri
+	if gui.ImageContent.SourceType ~= Enum.ContentSourceType.Object and (gui.Image == "" or gui.IsLoaded == false) then
+		return r, g, b, a
 	end
 
-	local image, isDownscaled = Utils.getEditableImage(gui)
+	local image, isDownscaled = Utils.getImage(gui)
 	if not image then
-		return color
+		return r, g, b, a
 	end
 
 	local queryInObjectSpace =
 		Utils.worldToLocal(queryPoint, gui.AbsolutePosition, gui.AbsoluteSize, math.rad(gui.Rotation))
-	local imageWidth, imageHeight = image.Size.X, image.Size.Y
+	local imageWidth, imageHeight = image.width, image.height
 	local objectWidth, objectHeight = gui.AbsoluteSize.X, gui.AbsoluteSize.Y
 	local queryInImageSpace = queryInObjectSpace
 
@@ -26,11 +30,11 @@ return function(queryPoint: Vector2, gui: ImageLabel | ImageButton): { number }
 			local imagePositionInObject = Vector2.new(0, (objectHeight - imageSizeInObject.Y) / 2)
 			local minimumObjectSpace = imagePositionInObject.Y / objectHeight
 			if queryInObjectSpace.Y < minimumObjectSpace then
-				return color
+				return r, g, b, a
 			end
 			local maximumObjectSpace = 1 - minimumObjectSpace
 			if queryInObjectSpace.Y > maximumObjectSpace then
-				return color
+				return r, g, b, a
 			end
 			local range = maximumObjectSpace - minimumObjectSpace
 
@@ -41,11 +45,11 @@ return function(queryPoint: Vector2, gui: ImageLabel | ImageButton): { number }
 			local imagePositionInObject = Vector2.new((objectWidth - imageSizeInObject.X) / 2, 0)
 			local minimumObjectSpace = imagePositionInObject.X / objectWidth
 			if queryInObjectSpace.X < minimumObjectSpace then
-				return color
+				return r, g, b, a
 			end
 			local maximumObjectSpace = 1 - minimumObjectSpace
 			if queryInObjectSpace.X > maximumObjectSpace then
-				return color
+				return r, g, b, a
 			end
 			local range = maximumObjectSpace - minimumObjectSpace
 
@@ -55,47 +59,40 @@ return function(queryPoint: Vector2, gui: ImageLabel | ImageButton): { number }
 	end
 
 	local downScaleFactor = (if isDownscaled then Utils.IMAGE_DOWNSCALE_FACTOR else 1)
-	local rectSize = gui.ImageRectSize * downScaleFactor / image.Size
-	if rectSize.X ~= 0 or rectSize.Y ~= 0 then
+	local rectScaleX = gui.ImageRectSize.X * downScaleFactor / imageWidth
+	local rectScaleY = gui.ImageRectSize.Y * downScaleFactor / imageHeight
+	if rectScaleX ~= 0 or rectScaleY ~= 0 then
 		-- Adjust queryInImageSpace based on rect cutout
-		local rectPos = gui.ImageRectOffset * downScaleFactor / image.Size
+		local rectPosX = gui.ImageRectOffset.X * downScaleFactor / imageWidth
+		local rectPosY = gui.ImageRectOffset.Y * downScaleFactor / imageHeight
 		queryInImageSpace = Vector2.new(
-			math.clamp(queryInImageSpace.X * rectSize.X + rectPos.X, 0, 1),
-			math.clamp(queryInImageSpace.Y * rectSize.Y + rectPos.Y, 0, 1)
+			math.clamp(queryInImageSpace.X * rectScaleX + rectPosX, 0, 1),
+			math.clamp(queryInImageSpace.Y * rectScaleY + rectPosY, 0, 1)
 		)
 	end
 
 	-- If the query point is outside the image, return the background color
 	if queryInImageSpace.X < 0 or queryInImageSpace.X > 1 or queryInImageSpace.Y < 0 or queryInImageSpace.Y > 1 then
-		return color
+		return r, g, b, a
 	end
 
 	-- Get the pixel color at the query point
-	local imageColor = image:ReadPixels(
-		Vector2.new(
-			math.clamp(math.floor(queryInImageSpace.X * imageWidth), 0, imageWidth - 1),
-			math.clamp(math.floor(queryInImageSpace.Y * imageHeight), 0, imageHeight - 1)
-		),
-		Vector2.one
+	local imageR, imageG, imageB, imageA = Utils.readPixel(
+		image,
+		math.clamp(math.floor(queryInImageSpace.X * imageWidth), 0, imageWidth - 1),
+		math.clamp(math.floor(queryInImageSpace.Y * imageHeight), 0, imageHeight - 1)
 	)
-	if not imageColor then
-		return color
-	end
 
 	-- Blend the gui properties
 	local multColor = gui.ImageColor3
-	imageColor[1] *= multColor.R
-	imageColor[2] *= multColor.G
-	imageColor[3] *= multColor.B
-	imageColor[4] *= (1 - gui.ImageTransparency)
+	imageR *= multColor.R
+	imageG *= multColor.G
+	imageB *= multColor.B
+	imageA *= 1 - gui.ImageTransparency
 
 	-- Blend this pixel over the background
-	local imageAlpha = imageColor[4]
-	local colorAlpha = color[4]
-	color[1] = (1 - imageAlpha) * (color[1] * colorAlpha) + imageAlpha * imageColor[1]
-	color[2] = (1 - imageAlpha) * (color[2] * colorAlpha) + imageAlpha * imageColor[2]
-	color[3] = (1 - imageAlpha) * (color[3] * colorAlpha) + imageAlpha * imageColor[3]
-	color[4] = math.max(imageAlpha, colorAlpha)
-
-	return color
+	return (1 - imageA) * (r * a) + imageA * imageR,
+		(1 - imageA) * (g * a) + imageA * imageG,
+		(1 - imageA) * (b * a) + imageA * imageB,
+		math.max(imageA, a)
 end
