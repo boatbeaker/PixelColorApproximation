@@ -18,5 +18,5 @@ Via [wally](https://wally.run):
 
 ```toml
 [dependencies]
-PixelColorApproximation = "boatbomber/pixelcolorapproximation@0.3.0"
+PixelColorApproximation = "boatbomber/pixelcolorapproximation@0.4.0"
 ```

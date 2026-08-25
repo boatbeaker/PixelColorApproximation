@@ -6,6 +6,7 @@ for _, module in script:GetChildren() do
 	handlerFunctions[module.Name] = require(module)
 end
 
+-- Each handler is a describe function that snapshots a GUI object into a layer record
 local ClassHandlers = setmetatable({
 	default = handlerFunctions.default,
 

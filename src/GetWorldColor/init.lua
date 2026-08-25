@@ -17,7 +17,7 @@ end)
 
 local nightColor, dayColor = Color3.fromRGB(2, 7, 30), Color3.fromRGB(89, 178, 210)
 local function estimateDefaultSky(origin: Vector3): (number, number, number, number)
-	-- No skybox, just roughly estimate the default blue sky
+	-- Estimate default sky color based on time of day
 	local clockTime = Lighting.ClockTime
 	local distFromNoon = math.abs(12 - clockTime) / 12
 	local noise = math.noise(origin.X * 70, origin.Y * 70, origin.Z * 70) / 10
@@ -26,7 +26,7 @@ local function estimateDefaultSky(origin: Vector3): (number, number, number, num
 	return color.R, color.G, color.B, 1
 end
 
-local function getSkyboxColor(origin: Vector3, direction: Vector3): (number, number, number, number)
+local function getSkyboxColor(origin: Vector3, direction: Vector3, footprint: number): (number, number, number, number)
 	if not currentSkybox then
 		return estimateDefaultSky(origin)
 	end
@@ -38,23 +38,24 @@ local function getSkyboxColor(origin: Vector3, direction: Vector3): (number, num
 		return estimateDefaultSky(origin)
 	end
 
-	local imageWidth, imageHeight = skyboxImage.width, skyboxImage.height
-	return Utils.readPixel(
-		skyboxImage,
-		math.clamp(math.floor(u * imageWidth), 0, imageWidth - 1),
-		math.clamp(math.floor(v * imageHeight), 0, imageHeight - 1)
-	)
+	-- Convert screen px to texels: face height = viewport height on screen
+	local footprintTexels = footprint * skyboxImage.height / workspace.CurrentCamera.ViewportSize.Y
+	return Utils.readPixelFiltered(skyboxImage, u, v, footprintTexels)
 end
 
--- Shared across queries so the common no-passthrough ray allocates nothing;
--- the filter list only rebuilds when a query passes through transparent parts
+-- Reused across queries to avoid allocation; filter list rebuilds only when transparent hits occur
 local raycastParams = RaycastParams.new()
 raycastParams.FilterType = Enum.RaycastFilterType.Exclude
 raycastParams.IgnoreWater = false
 
 local ignoreList: { Instance } = {}
 
-local function raycastUntilColor(origin: Vector3, direction: Vector3, length: number): (number, number, number, number)
+local function raycastUntilColor(
+	origin: Vector3,
+	direction: Vector3,
+	length: number,
+	footprint: number
+): (number, number, number, number)
 	if #ignoreList > 0 then
 		table.clear(ignoreList)
 		raycastParams.FilterDescendantsInstances = ignoreList
@@ -64,11 +65,10 @@ local function raycastUntilColor(origin: Vector3, direction: Vector3, length: nu
 		local raycastResult = workspace:Raycast(origin, direction * length, raycastParams)
 
 		if not raycastResult or not raycastResult.Instance then
-			return getSkyboxColor(origin, direction)
+			return getSkyboxColor(origin, direction, footprint)
 		end
 
-		-- We should techincally be casting through semi-transparent objects and blending the result,
-		-- but that's super costly and we need to be fast so we just use the first object we find
+		-- Casting through semi-transparent objects is too slow; use the first opaque hit
 
 		local hit = raycastResult.Instance
 		local fogBlend = if raycastResult.Distance >= Lighting.FogStart
@@ -92,16 +92,14 @@ local function raycastUntilColor(origin: Vector3, direction: Vector3, length: nu
 			origin = raycastResult.Position
 			length -= raycastResult.Distance
 		else
-			-- Note that this can be wildly wrong for textured or decaled items
-			-- but again- speed is more important here. We aren't writing a raycast renderer,
-			-- we're just approximating colors.
+			-- Textured/decaled items use base color only; prioritizes speed over accuracy
 			local color = hit.Color:Lerp(Lighting.FogColor, fogBlend)
 			return color.R, color.G, color.B, 1 - hit.Transparency
 		end
 	end
 end
 
-return function(queryPoint: Vector2): (number, number, number, number)
-	local ray = workspace.CurrentCamera:ScreenPointToRay(queryPoint.X, queryPoint.Y, 0)
-	return raycastUntilColor(ray.Origin, ray.Direction, 500)
+return function(x: number, y: number, footprint: number?): (number, number, number, number)
+	local ray = workspace.CurrentCamera:ScreenPointToRay(x, y, 0)
+	return raycastUntilColor(ray.Origin, ray.Direction, 500, footprint or 1)
 end

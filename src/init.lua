@@ -1,50 +1,58 @@
 local PlayerGui = game:GetService("Players").LocalPlayer:WaitForChild("PlayerGui", math.huge)
 
-local GetGuiColor = require(script.GetGuiColor)
+local GetGuiSampler = require(script.GetGuiSampler)
 local GetWorldColor = require(script.GetWorldColor)
 
 local PixelColorApproximation = {}
 
-function PixelColorApproximation:GetColor(queryPoint: Vector2, topLayer: GuiObject?): { number }
-	local guisAtPosition = PlayerGui:GetGuiObjectsAtPosition(queryPoint.X, queryPoint.Y)
+-- Hot-path form: no allocations per call. footprint is diameter in screen px; layers average over it to prevent aliasing
+function PixelColorApproximation:GetColorXY(
+	x: number,
+	y: number,
+	topLayer: GuiObject?,
+	footprint: number?
+): (number, number, number, number)
+	local guisAtPosition = PlayerGui:GetGuiObjectsAtPosition(x, y)
 
-	-- Blend front to back: each layer contributes through the combined
-	-- transmittance of the layers above it
+	-- Blend front to back through transmittance
 	local r, g, b = 0, 0, 0
 	local transmittance = 1
 	local topLayerIndex = if topLayer then table.find(guisAtPosition, topLayer) else nil
 
 	for i = (topLayerIndex or 0) + 1, #guisAtPosition do
-		local gui = guisAtPosition[i]
+		local sampler = GetGuiSampler(guisAtPosition[i])
 
-		local layerR, layerG, layerB, layerA = GetGuiColor(queryPoint, gui)
-		if layerA <= 0 then
-			-- Skip invisible objects
+		local guiR, guiG, guiB, guiA = sampler:sample(x, y, footprint)
+		if guiA <= 0 then
 			continue
 		end
 
-		local weight = transmittance * layerA
-		r += weight * layerR
-		g += weight * layerG
-		b += weight * layerB
-		transmittance *= 1 - layerA
+		local weight = transmittance * guiA
+		r += weight * guiR
+		g += weight * guiG
+		b += weight * guiB
+		transmittance *= 1 - guiA
 
-		-- Everything beneath an opaque layer is covered
 		if transmittance <= 0 then
 			break
 		end
 	end
 
-	-- If the UI is not opaque, we'll roughly get world color underneath
+	-- Sample world color if UI is not opaque
 	if transmittance > 0 then
-		local worldR, worldG, worldB, worldA = GetWorldColor(queryPoint)
+		local worldR, worldG, worldB, worldA = GetWorldColor(x, y, footprint)
 		local weight = transmittance * worldA
 		r += weight * worldR
 		g += weight * worldG
 		b += weight * worldB
 	end
 
-	return { r, g, b, 1 }
+	return r, g, b, 1
+end
+
+function PixelColorApproximation:GetColor(queryPoint: Vector2, topLayer: GuiObject?, footprint: number?): { number }
+	local r, g, b, a = self:GetColorXY(queryPoint.X, queryPoint.Y, topLayer, footprint)
+	return { r, g, b, a }
 end
 
 return PixelColorApproximation
